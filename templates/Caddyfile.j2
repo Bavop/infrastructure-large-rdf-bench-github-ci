@@ -1,8 +1,11 @@
 {% for h in groups['endpoints'] %}
 :{{ hostvars[h].endpoint_port }} {
-	@unauthorized not header Authorization "Bearer {{ qlever_access_token }}"
-	respond @unauthorized 401
+	#@unauthorized not header Authorization "Bearer {{ qlever_access_token }}"
+	#respond @unauthorized 401
 
-	reverse_proxy {{ qlever_container_name }}-{{ h }}:{{ hostvars[h].endpoint_port }}
+	reverse_proxy {{ qlever_container_name }}-{{ h }}:{{ hostvars[h].endpoint_port }} {
+		header_down -Access-Control-Allow-Origin
+		header_down Access-Control-Allow-Origin "*"
+	}
 }
 {% endfor %}
