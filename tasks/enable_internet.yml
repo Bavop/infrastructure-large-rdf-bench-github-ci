@@ -2,7 +2,6 @@
 # npm, which are effectively IPv4-only. enable-nat.sh is NOT idempotent -- it errors
 # if NAT is already enabled -- so we probe connectivity first and only run it when
 # needed. github.com is IPv4-only, so it is a good IPv4 reachability test.
-
 - name: Check whether outbound IPv4 internet already works
   ansible.builtin.uri:
     url: https://github.com

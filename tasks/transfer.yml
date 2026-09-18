@@ -1,42 +1,26 @@
-# Push this endpoint's HDT + external index from the client over the internal LAN.
-# rsync runs ON the client (delegate_to) and targets this endpoint's wall address.
-# Requires client->endpoint SSH (jFed usually gives passwordless inter-node SSH).
-# throttle: all rsyncs delegate to the one client, so cap concurrency to stay
-# under the client sshd / bastion connection limit (MaxStartups) -- more parallel
-# copies only storm the same uplink.
-- name: Copy this endpoint's HDT (+index) from the client
-  ansible.builtin.command:
-    cmd: >
-      rsync -a
-      -e "ssh -o StrictHostKeyChecking=accept-new -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa"
-      "{{ experiment_dest }}/data/benchmark/datasets/hdt/{{ inventory_hostname }}.hdt{{ item }}"
-      "{{ ansible_user }}@{{ ansible_host }}:{{ endpoint_data_dir }}/"
-  delegate_to: "{{ groups['client'][0] }}"
-  throttle: 4
-  loop: [ "", ".index.v1-1" ]
-  when: endpoint_engine == 'comunica'
+- name: Ensure the rdf_datasets directory exists
+  ansible.builtin.file:
+    path: "{{ endpoint_data_dir }}/rdf_datasets"
+    state: directory
+    mode: "0755"
 
-- name: Locate this endpoint's RDF source file on the client
-  ansible.builtin.find:
-    paths: "{{ endpoint_rdf_dir }}"
-    patterns: "{{ qlever_rdf_patterns }}"
-  register: qlever_rdf_src
-  delegate_to: "{{ groups['client'][0] }}"
-  throttle: 4
-  when: endpoint_engine == 'qlever'
+- name: Print the dataset target path
+  ansible.builtin.debug:
+    msg: "Extracting datasets into target directory: {{ endpoint_data_dir }}/rdf_datasets"
 
-- name: Fail if no RDF source file was found
-  ansible.builtin.fail:
-    msg: "No RDF file matching {{ qlever_rdf_patterns | join(', ') }} in {{ endpoint_rdf_dir }} on the client"
-  when: endpoint_engine == 'qlever' and qlever_rdf_src.matched == 0
+- name: Download rdf_datasets.zip
+  ansible.builtin.get_url:
+    url: "https://zenodo.org/records/22140177/files/rdf_datasets.zip?download=1"
+    dest: "/tmp/rdf_datasets.zip"
+    mode: "0644"
 
-- name: Copy this endpoint's RDF file from the client
-  ansible.builtin.command:
-    cmd: >
-      rsync -a
-      -e "ssh -o StrictHostKeyChecking=accept-new -o HostKeyAlgorithms=+ssh-rsa -o PubkeyAcceptedKeyTypes=+ssh-rsa"
-      "{{ qlever_rdf_src.files[0].path }}"
-      "{{ ansible_user }}@{{ ansible_host }}:{{ endpoint_data_dir }}/"
-  delegate_to: "{{ groups['client'][0] }}"
-  throttle: 4
-  when: endpoint_engine == 'qlever'
+- name: Extract rdf_datasets.zip into the rdf_datasets directory
+  ansible.builtin.unarchive:
+    src: "/tmp/rdf_datasets.zip"
+    dest: "{{ endpoint_data_dir }}/rdf_datasets"
+    remote_src: true
+
+- name: Remove the downloaded archive
+  ansible.builtin.file:
+    path: "/tmp/rdf_datasets.zip"
+    state: absent

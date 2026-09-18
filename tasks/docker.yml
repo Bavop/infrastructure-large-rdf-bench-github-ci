@@ -1,5 +1,4 @@
 - name: Install Docker engine
-  # The data Makefile invokes `docker` directly (hdt-java image build + hdt-cpp).
   ansible.builtin.apt:
     name: docker.io
     state: present
@@ -14,8 +13,6 @@
   become: true
 
 - name: Add the login user to the docker group
-  # Lets later (non-become) stages run `docker` without sudo, so SSH agent
-  # forwarding keeps working for git.
   ansible.builtin.user:
     name: "{{ ansible_user }}"
     groups: docker

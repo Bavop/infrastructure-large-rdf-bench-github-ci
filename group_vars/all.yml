@@ -1,63 +1,38 @@
----
-# =============================================================================
-# All tunable settings for the benchmark_infrastructure playbook live here.
-# Task files under tasks/ reference these variables only -- no literals.
-#
-# The Virtual Wall *connection* settings (bastion/user/PEM) below are documented
-# here; the actual per-host addresses and the SSH connection string live in
-# inventory.yml, because Ansible reads the inventory *before* group_vars and
-# therefore cannot template the connection string from here. See
-# inventory.yml.example for the mapping.
-# =============================================================================
-
-# --- Virtual Wall connection (mirror these in inventory.yml) -----------------
-wall_bastion_host: bastion.ilabt.imec.be
-wall_bastion_user: fffbrtamuge
-wall_ssh_user: brtamuge
-wall_pem_file: ~/.ssh/ilabt.pem
-
-# --- Testbed provisioning ----------------------------------------------------
+# --- Testbed provisioning -----------------------------------------------------
 # Base URL that serves the imec Virtual Wall helper scripts.
 wall_scripts_base: https://www.wall2.ilabt.iminds.be
 # Enlarge the root partition to fill the physical disk(s) (reboots the node).
-expand_root_disk: true
+expand_root_disk: false
 # Enable outbound IPv4 via NAT (IPv6 is on by default but GitHub/DockerHub/npm
 # are effectively IPv4-only). Re-applied every run -- it is not reboot-persistent.
 enable_nat: true
 
-# --- Experiment (cloned + yarn-installed, then left ready for you to run) -----
-experiment_repo: git@github.com:shape-federated-queries/ask-count-fedx-large-rdf-bench.git
-experiment_version: main
-experiment_dest: "{{ ansible_env.HOME }}/experiment"
-
-# --- Endpoints ---------------------------------------------------------------
-endpoint_data_dir: "{{ ansible_env.HOME }}/data"
-endpoint_comunica_pkg: "@comunica/query-sparql-hdt"
-endpoint_node_heap_mb: 18432
-endpoint_engine: comunica
-# comunica endpoint supervisor (serve_comunica.sh): startup wait, health-check
-# interval, and consecutive failures before a hung endpoint is killed + restarted.
-endpoint_startup_max: 300
-endpoint_check_interval: 20
-endpoint_fail_limit: 3
-
-# --- QLever ------------------------------------------------------------------
+# --- QLever --------------------------------------------------------------
+# Each dataset gets its own index/container/port
+endpoint_port: 3002
+endpoint_data_dir: "{{ ansible_env.HOME }}/data/rdf_datasets"
 qlever_image: adfreiburg/qlever
 qlever_container_name: qlever-endpoint
-qlever_memory_max: "16G"
-qlever_cache_max: "4G"
+# 13 of these run concurrently on a 23G host -- keep each one's budget small.
+# Even so, their on-disk indexes (several multi-GB) all compete for the same
+# page cache, so expect I/O-bound slowdowns under concurrent load, not just
+# "no crash".
+qlever_memory_max: "1G"
+qlever_cache_max: "256M"
 qlever_cache_entries: 0
 qlever_index_memory: "12G"
 qlever_query_timeout: "1800s"
-endpoint_rdf_dir: "{{ experiment_dest }}/data/benchmark/datasets"
-qlever_rdf_patterns:
-  - "{{ inventory_hostname }}.nt"
-  - "{{ inventory_hostname }}.nq"
+# Gates every query, not just QLever's own privileged admin endpoints --
+# enforced by Caddy in front of QLever (see templates/Caddyfile.j2). Kept
+# here in cleartext for now, per request -- change it if that stops being
+# acceptable (this file is tracked in git).
+qlever_access_token: "verysecret"
 
-# --- Toolchain ---------------------------------------------------------------
-nodejs_major: "22"
-yarn_version: "1.22.22"
-go_version: "1.23.4"
-# Rust + sophia-cli (sop). Required: `make pipeline` runs validate-clean-dataset
-# which invokes `sop`. Only set false if you trim those targets out.
-install_sop: true
+# --- Caddy -----------------------------------------------------------------
+# Fronts every dataset's QLever container on this host: enforces the access
+# token on every request and is the only thing with a port published to the
+# host (QLever itself sits on a private docker network). See
+# tasks/start_endpoint.yml for why the Caddy tasks there use run_once.
+caddy_image: caddy:2-alpine
+caddy_container_name: caddy-endpoint
+qlever_docker_network: qlever-net

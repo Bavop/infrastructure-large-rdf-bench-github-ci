@@ -1,0 +1,7 @@
+- name: Print each host's IP address
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Show IP address
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ ansible_host }}"

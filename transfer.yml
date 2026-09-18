@@ -1,20 +1,15 @@
-# Once the client's data generation is done: transfer each HDT from the client to
-# the endpoint that serves it, start comunica there, then render endpoints.json on
-# the client and sanity-check every endpoint. Leaves the experiment ready; you start
-# the run yourself (`make run`).
-- name: Transfer HDTs and start the endpoints
-  hosts: endpoints
+# Build and serve each dataset's QLever index, fronted by a shared Caddy that
+# enforces the access token (see tasks/start_endpoint.yml). Run after the RDF
+# data is already on the host under endpoint_data_dir (see tasks/transfer.yml
+# for the one-off download step, currently disabled below since the data is
+# already in place).
+- name: Build and serve every dataset's QLever endpoint
+  hosts: all
   gather_facts: true
+  gather_subset: min
   tasks:
-    - name: Push this endpoint's HDT (+index) from the client
+    - name: Download and extract the RDF datasets
       ansible.builtin.include_tasks: tasks/transfer.yml
 
-    - name: Serve this endpoint's HDT with comunica
+    - name: Build and serve this dataset's QLever index
       ansible.builtin.include_tasks: tasks/start_endpoint.yml
-
-- name: Render endpoints.json and sanity-check
-  hosts: client
-  gather_facts: true
-  tasks:
-    - name: Render endpoints.json from the inventory and run the healthcheck
-      ansible.builtin.include_tasks: tasks/sanity_check.yml

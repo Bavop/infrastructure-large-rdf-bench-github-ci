@@ -1,9 +1,11 @@
-# Provision the 13 SPARQL endpoint nodes: install comunica so each can serve one
-# HDT. Light and independent of the client -- runs concurrently with client.yml via
-# `make provision`. Assumes `common.yml` ran first.
-- name: Provision the SPARQL endpoint nodes (comunica host)
-  hosts: endpoints
+# run_once below because every dataset in the `endpoints` group currently
+# shares the same physical machine -- Docker/image/data-dir setup only needs
+# to happen once, not once per dataset (same caveat as in common.yml).
+- name: Provision the SPARQL endpoint nodes
+  hosts: all
   gather_facts: true
+  gather_subset: min
   tasks:
-    - name: Install the comunica SPARQL-HDT endpoint
+    - name: Install Docker and pull the QLever image
       ansible.builtin.include_tasks: tasks/endpoint_setup.yml
+      run_once: true

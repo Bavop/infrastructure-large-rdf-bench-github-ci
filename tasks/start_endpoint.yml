@@ -1,4 +1,131 @@
-# Start this endpoint's engine (comunica or qlever), selected per host via
-# endpoint_engine in the inventory.
-- name: Start this endpoint's engine
-  ansible.builtin.include_tasks: "start_{{ endpoint_engine }}.yml"
+# Build 1 index per dataset, this step is throttled since now all datasets
+# are on the same host so building them in parrallel would OOM
+# then they are all started on a docker network behind a caddy to be able to add 
+# some basic access token checking
+- name: Get the endpoint user UID
+  ansible.builtin.command: id -u
+  register: endpoint_uid
+  changed_when: false
+
+- name: Get the endpoint user GID
+  ansible.builtin.command: id -g
+  register: endpoint_gid
+  changed_when: false
+
+- name: Set this dataset's QLever container name
+  ansible.builtin.set_fact:
+    qlever_container: "{{ qlever_container_name }}-{{ inventory_hostname }}"
+
+- name: Stop any existing QLever container for this dataset
+  ansible.builtin.command: docker rm -f {{ qlever_container }}
+  changed_when: false
+  failed_when: false
+
+- name: Ensure the QLever docker network exists
+  ansible.builtin.command: docker network create {{ qlever_docker_network }}
+  changed_when: false
+  failed_when: false
+
+- name: Ensure this dataset's index directory exists
+  ansible.builtin.file:
+    path: "{{ endpoint_data_dir }}/{{ inventory_hostname }}"
+    state: directory
+    mode: "0755"
+
+- name: Check whether this dataset's QLever index already exists
+  ansible.builtin.stat:
+    path: "{{ endpoint_data_dir }}/{{ inventory_hostname }}/{{ inventory_hostname }}.index.spo"
+  register: qlever_index
+
+- name: Locate this dataset's RDF file
+  ansible.builtin.find:
+    paths: "{{ endpoint_data_dir }}"
+    patterns:
+      - "{{ inventory_hostname }}.nt"
+      - "{{ inventory_hostname }}.nq"
+      - "{{ inventory_hostname }}.ttl"
+  register: qlever_rdf
+  when: not qlever_index.stat.exists
+
+- name: Fail if no RDF file was found for this dataset
+  ansible.builtin.fail:
+    msg: "No RDF file matching {{ inventory_hostname }}.{nt,nq,ttl} in {{ endpoint_data_dir }}"
+  when: not qlever_index.stat.exists and qlever_rdf.matched == 0
+
+- name: Build this dataset's QLever index
+  ansible.builtin.command:
+    cmd: >-
+      docker run --rm
+      --user {{ endpoint_uid.stdout }}:{{ endpoint_gid.stdout }}
+      --entrypoint qlever-index
+      -v {{ endpoint_data_dir }}:/source:ro
+      -v {{ endpoint_data_dir }}/{{ inventory_hostname }}:/data -w /data
+      {{ qlever_image }}
+      -i {{ inventory_hostname }}
+      -f /source/{{ qlever_rdf.files[0].path | basename }}
+      -m {{ qlever_index_memory }}
+      --parallel-parsing false
+  when: not qlever_index.stat.exists
+  throttle: 1
+
+- name: Serve this dataset's QLever index (detached, private network only)
+  ansible.builtin.command:
+    cmd: >
+      docker run -d --restart unless-stopped --name {{ qlever_container }}
+      --network {{ qlever_docker_network }}
+      --user {{ endpoint_uid.stdout }}:{{ endpoint_gid.stdout }}
+      --entrypoint qlever-server
+      -v {{ endpoint_data_dir }}/{{ inventory_hostname }}:/data -w /data
+      {{ qlever_image }}
+      -i {{ inventory_hostname }} -p {{ endpoint_port }}
+      -m {{ qlever_memory_max }} -c {{ qlever_cache_max }}
+      --cache-max-num-entries {{ qlever_cache_entries }}
+      -s {{ qlever_query_timeout }}
+      -a {{ qlever_access_token }}
+
+- name: Stop any existing Caddy container
+  ansible.builtin.command: docker rm -f {{ caddy_container_name }}
+  changed_when: false
+  failed_when: false
+  run_once: true
+
+- name: Render the shared Caddyfile (one site block per dataset on this host)
+  ansible.builtin.template:
+    src: templates/Caddyfile.j2
+    dest: "{{ endpoint_data_dir }}/Caddyfile"
+    mode: "0644"
+  run_once: true
+
+- name: Serve all datasets behind one Caddy (detached, publishes every dataset's port)
+  ansible.builtin.command:
+    cmd: >-
+      docker run -d --restart unless-stopped --name {{ caddy_container_name }}
+      --network {{ qlever_docker_network }}
+      {% for h in groups['endpoints'] %}-p {{ hostvars[h].endpoint_port }}:{{ hostvars[h].endpoint_port }} {% endfor %}
+      -v {{ endpoint_data_dir }}/Caddyfile:/etc/caddy/Caddyfile:ro
+      {{ caddy_image }}
+  run_once: true
+
+- name: Wait for this dataset's endpoint to listen
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ endpoint_port }}"
+    timeout: 300
+
+- name: Verify it rejects requests without the access token
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ endpoint_port }}/sparql?query=ASK%7B%3Fs%20%3Fp%20%3Fo%7D"
+    headers:
+      Accept: application/sparql-results+json
+    status_code: 401
+  register: unauth_check
+
+- name: Verify it answers ASK at /sparql with the access token
+  ansible.builtin.uri:
+    url: "http://127.0.0.1:{{ endpoint_port }}/sparql?query=ASK%7B%3Fs%20%3Fp%20%3Fo%7D"
+    headers:
+      Accept: application/sparql-results+json
+      Authorization: "Bearer {{ qlever_access_token }}"
+    return_content: true
+  register: ask
+  failed_when: "'true' not in ask.content"
